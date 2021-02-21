@@ -29,10 +29,10 @@ class ResPartner(models.Model):
     )
     city = fields.Char(compute="_compute_city", readonly=False, store=True)
     zip = fields.Char(compute="_compute_zip", readonly=False, store=True)
-    country_id = fields.Many2one(
-        compute="_compute_country_id", readonly=False, store=True
-    )
+    borough_id = fields.Many2one(compute="_compute_borough_id", readonly=False, store=True)
+    department_id = fields.Many2one(compute="_compute_department_id", readonly=False, store=True)
     state_id = fields.Many2one(compute="_compute_state_id", readonly=False, store=True)
+    country_id = fields.Many2one(compute="_compute_country_id", readonly=False, store=True)
 
     @api.depends("city_id")
     def _compute_allowed_zip_ids(self):
@@ -99,6 +99,24 @@ class ResPartner(models.Model):
             state = record.zip_id.city_id.state_id
             if state and record.state_id != state:
                 record.state_id = record.zip_id.city_id.state_id
+
+    @api.depends("zip_id")
+    def _compute_department_id(self):
+        if hasattr(super(), "_compute_department_id"):
+            super()._compute_department_id()  # pragma: no cover
+        for record in self:
+            department = record.zip_id.city_id.department_id
+            if department and record.department_id != department:
+                record.department_id = record.zip_id.city_id.department_id
+
+    @api.depends("zip_id")
+    def _compute_borough_id(self):
+        if hasattr(super(), "_compute_borough_id"):
+            super()._compute_borough_id()  # pragma: no cover
+        for record in self:
+            borough = record.zip_id.city_id.borough_id
+            if borough and record.borough_id != borough:
+                record.borough_id = record.zip_id.city_id.borough_id
 
     @api.constrains("zip_id", "country_id", "city_id", "state_id")
     def _check_zip(self):

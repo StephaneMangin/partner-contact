@@ -27,6 +27,10 @@
                     class="oe_edit_only"
                 />
             </xpath>
+            <field name="country_id" position="before">
+                <field name="borough_id" />
+                <field name="department_id" />
+            </field>
         </field>
     </record>
 </odoo>

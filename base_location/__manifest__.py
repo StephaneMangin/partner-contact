@@ -21,6 +21,8 @@
         "security/ir.model.access.csv",
         "views/res_city_zip_view.xml",
         "views/res_city_view.xml",
+        "views/res_borough_view.xml",
+        "views/res_department_view.xml",
         "views/res_country_view.xml",
         "views/res_company_view.xml",
         "views/res_partner_view.xml",
