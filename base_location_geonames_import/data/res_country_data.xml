@@ -8,4 +8,10 @@
         <field name="geonames_state_code_column" eval="6" />
         <field name="geonames_state_name_column" eval="5" />
     </record>
+    <record id="base.fr" model="res.country">
+        <field name="geonames_borough_code_column" eval="8" />
+        <field name="geonames_borough_name_column" eval="7" />
+        <field name="geonames_state_code_column" eval="6" />
+        <field name="geonames_state_name_column" eval="5" />
+    </record>
 </odoo>
