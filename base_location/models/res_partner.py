@@ -27,6 +27,12 @@ class ResPartner(models.Model):
         readonly=False,
         store=True,
     )
+    borough_id = fields.Many2one(
+        "res.borough",
+        related="city_id.borough_id",
+        string="Borough",
+        store=True,
+    )
     city = fields.Char(compute="_compute_city", readonly=False, store=True)
     zip = fields.Char(compute="_compute_zip", readonly=False, store=True)
     country_id = fields.Many2one(
