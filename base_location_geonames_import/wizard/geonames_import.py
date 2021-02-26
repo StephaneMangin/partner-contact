@@ -5,6 +5,7 @@
 #                <contact@eficent.com>
 # Copyright 2018 Aitor Bouzas <aitor.bouzas@adaptivecity.com>
 # Copyright 2016-2020 Tecnativa - Pedro M. Baeza
+# Copyright 2021 Stéphane Mangin <stephane.mangin@freesbee.fr>
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html).
 
 import csv
@@ -38,17 +39,17 @@ class CityZipGeonamesImport(models.TransientModel):
     )
 
     @api.model
-    def transform_city_name(self, city, country):
-        """Override it for transforming city name (if needed)
-        :param city: Original city name
+    def transform_name(self, name):
+        """Override it for transforming name (if needed)
+        :param city: Original name
         :param country: Country record
-        :return: Transformed city name
+        :return: Transformed name
         """
-        res = city
+        res = name
         if self.letter_case == "title":
-            res = city.title()
+            res = name.title()
         elif self.letter_case == "upper":
-            res = city.upper()
+            res = name.upper()
         return res
 
     @api.model
@@ -66,13 +67,37 @@ class CityZipGeonamesImport(models.TransientModel):
         )
 
     @api.model
-    def select_city(self, row, country, state_id):
+    def select_department(self, row, state_id):
+        # This has to be done by SQL for performance reasons avoiding
+        # left join with ir_translation on the translatable field "name"
+        self.env.cr.execute(
+            "SELECT id, name FROM res_country_department "
+            "WHERE name = %s AND code= %s AND state_id = %s LIMIT 1",
+            (self.transform_name(row[7]), row[8], state_id),
+        )
+        row_department = self.env.cr.fetchone()
+        return (row_department[0], row_department[1]) if row_department else (False, False)
+
+    @api.model
+    def select_borough(self, row, state_id):
+        # This has to be done by SQL for performance reasons avoiding
+        # left join with ir_translation on the translatable field "name"
+        self.env.cr.execute(
+            "SELECT id, name FROM res_country_borough "
+            "WHERE name = %s AND code= %s AND state_id = %s LIMIT 1",
+            (self.transform_name(row[7]), row[8], state_id),
+        )
+        row_borough = self.env.cr.fetchone()
+        return (row_borough[0], row_borough[1]) if row_borough else (False, False)
+
+    @api.model
+    def select_city(self, row, borough_id, state_id, country_id):
         # This has to be done by SQL for performance reasons avoiding
         # left join with ir_translation on the translatable field "name"
         self.env.cr.execute(
             "SELECT id, name FROM res_city "
-            "WHERE name = %s AND country_id = %s AND state_id = %s LIMIT 1",
-            (self.transform_city_name(row[2], country), country.id, state_id),
+            "WHERE name = %s AND borough_id = %s AND state_id = %s AND country_id = %s LIMIT 1",
+            (self.transform_name(row[2]), borough_id, state_id, country_id),
         )
         row_city = self.env.cr.fetchone()
         return (row_city[0], row_city[1]) if row_city else (False, False)
@@ -93,9 +118,29 @@ class CityZipGeonamesImport(models.TransientModel):
         }
 
     @api.model
-    def prepare_city(self, row, country, state_id):
+    def prepare_department(self, row, country, state_id):
+        return {
+            "name": row[country.geonames_department_name_column or 5],
+            "code": row[country.geonames_department_code_column or 6],
+            "state_id": state_id,
+        }
+
+    @api.model
+    def prepare_borough(self, row, country, state_id):
+        name = row[country.geonames_borough_name_column or 7]
+        code = row[country.geonames_borough_code_column or 8]
+        if name and code:
+            return {
+                "name": name,
+                "code": code,
+                "state_id": state_id,
+            }
+
+    @api.model
+    def prepare_city(self, row, borough_id, state_id, country):
         vals = {
-            "name": self.transform_city_name(row[2], country),
+            "name": self.transform_name(row[2]),
+            "borough_id": borough_id,
             "state_id": state_id,
             "country_id": country.id,
         }
@@ -103,7 +148,10 @@ class CityZipGeonamesImport(models.TransientModel):
 
     @api.model
     def prepare_zip(self, row, city_id):
-        vals = {"name": row[1], "city_id": city_id}
+        vals = {
+            "name": row[1],
+            "city_id": city_id,
+        }
         return vals
 
     @api.model
@@ -155,8 +203,66 @@ class CityZipGeonamesImport(models.TransientModel):
             state_dict[vals["code"]] = created_states[i].id
         return state_dict
 
+    def _create_departments(
+        self, parsed_csv, search_departments, max_import, state_dict, country
+    ):
+        # Departments
+        department_vals_list = []
+        department_dict = {}
+        for i, row in enumerate(parsed_csv):
+            if max_import and i == max_import:
+                break
+            state_id = state_dict[row[country.geonames_state_code_column or 4]]
+            department_id, department_name = (
+                self.select_department(row, state_id)
+                if search_departments
+                else (False, False)
+            )
+            if not department_id:
+                department_vals = self.prepare_department(row, country, state_id)
+                if department_vals and department_vals not in department_vals_list:
+                    department_vals_list.append(department_vals)
+            else:
+                department_dict[(department_name, state_id)] = department_id
+        ctx = dict(self.env.context)
+        ctx.pop("lang", None)  # make sure no translation is added
+        # print(department_vals_list)
+        created_departments = self.env["res.country.department"].with_context(ctx).create(department_vals_list)
+        for i, vals in enumerate(department_vals_list):
+            department_dict[vals["code"]] = created_departments[i].id
+        return department_dict
+
+    def _create_boroughs(
+        self, parsed_csv, search_boroughs, max_import, state_dict, country
+    ):
+        # Boroughs
+        borough_vals_list = []
+        borough_dict = {}
+        for i, row in enumerate(parsed_csv):
+            if max_import and i == max_import:
+                break
+            state_id = state_dict[row[country.geonames_state_code_column or 6]]
+            borough_id, borough_name = (
+                self.select_borough(row, country, state_id)
+                if search_boroughs
+                else (False, False)
+            )
+            if not borough_id:
+                borough_vals = self.prepare_borough(row, country, state_id)
+                if borough_vals and borough_vals not in borough_vals_list:
+                    borough_vals_list.append(borough_vals)
+            else:
+                borough_dict[(borough_name, state_id)] = borough_id
+        ctx = dict(self.env.context)
+        ctx.pop("lang", None)  # make sure no translation is added
+        # print(borough_vals_list)
+        created_boroughs = self.env["res.country.borough"].with_context(ctx).create(borough_vals_list)
+        for i, vals in enumerate(borough_vals_list):
+            borough_dict[vals["code"]] = created_boroughs[i].id
+        return borough_dict
+
     def _create_cities(
-        self, parsed_csv, search_cities, max_import, state_dict, country
+        self, parsed_csv, search_cities, max_import, borough_dict, state_dict, country
     ):
         # Cities
         city_vals_list = []
@@ -164,18 +270,19 @@ class CityZipGeonamesImport(models.TransientModel):
         for i, row in enumerate(parsed_csv):
             if max_import and i == max_import:
                 break
+            borough_id = borough_dict.get(row[country.geonames_borough_code_column or 8], False)
             state_id = state_dict[row[country.geonames_state_code_column or 4]]
             city_id, city_name = (
-                self.select_city(row, country, state_id)
+                self.select_city(row, country, borough_id, state_id)
                 if search_cities
                 else (False, False)
             )
             if not city_id:
-                city_vals = self.prepare_city(row, country, state_id)
+                city_vals = self.prepare_city(row, borough_id, state_id, country)
                 if city_vals not in city_vals_list:
                     city_vals_list.append(city_vals)
             else:
-                city_dict[(city_name, state_id)] = city_id
+                city_dict[(city_name, borough_id)] = city_id
         ctx = dict(self.env.context)
         ctx.pop("lang", None)  # make sure no translation is added
         created_cities = self.env["res.city"].with_context(ctx).create(city_vals_list)
@@ -193,20 +300,34 @@ class CityZipGeonamesImport(models.TransientModel):
         state_model = self.env["res.country.state"]
         zip_model = self.env["res.city.zip"]
         res_city_model = self.env["res.city"]
+        res_country_borough_model = self.env["res.country.borough"]
+        res_country_department_model = self.env["res.country.department"]
         # Store current record list
         old_zips = set(zip_model.search([("city_id.country_id", "=", country.id)]).ids)
         search_zips = len(old_zips) > 0
         old_cities = set(res_city_model.search([("country_id", "=", country.id)]).ids)
         search_cities = len(old_cities) > 0
+        # old_departments = set(res_country_department_model.search([("country_id", "=", country.id)]).ids)
+        # search_departments = len(old_departments) > 0
+        old_boroughs = set(res_country_borough_model.search([("country_id", "=", country.id)]).ids)
+        search_boroughs = len(old_boroughs) > 0
         current_states = state_model.search([("country_id", "=", country.id)])
         search_states = len(current_states) > 0
         max_import = self.env.context.get("max_import", 0)
-        logger.info("Starting to create the cities and/or city zip entries")
-        # Pre-create states and cities
+        logger.info("Starting to create the boroughs, cities and/or city zip entries")
+
+        # Pre-create states, boroughs, townships and cities
         state_dict = self._create_states(parsed_csv, search_states, max_import, country)
-        city_dict = self._create_cities(
-            parsed_csv, search_cities, max_import, state_dict, country
+        # department_dict = self._create_departments(
+        #     parsed_csv, search_departments, max_import, state_dict, country
+        # )
+        borough_dict = self._create_boroughs(
+            parsed_csv, search_boroughs, max_import, state_dict, country
         )
+        city_dict = self._create_cities(
+            parsed_csv, search_cities, max_import, borough_dict, state_dict, country
+        )
+
         # Zips
         zip_vals_list = []
         for i, row in enumerate(parsed_csv):
@@ -219,13 +340,14 @@ class CityZipGeonamesImport(models.TransientModel):
                 zip_code = self.select_zip(row, country, state_id)
             if not zip_code:
                 city_id = city_dict[
-                    (self.transform_city_name(row[2], country), state_id)
+                    (self.transform_name(row[2]), state_id)
                 ]
                 zip_vals = self.prepare_zip(row, city_id)
                 if zip_vals not in zip_vals_list:
                     zip_vals_list.append(zip_vals)
             else:
                 old_zips.remove(zip_code.id)
+
         self.env["res.city.zip"].create(zip_vals_list)
         if not max_import:
             if old_zips:
@@ -243,8 +365,24 @@ class CityZipGeonamesImport(models.TransientModel):
                     "%d res.city entries deleted for country %s"
                     % (len(old_cities), country.name)
                 )
+            old_boroughs -= set(borough_dict.values())
+            if old_boroughs:
+                logger.info("removing borough entries")
+                self.env["res.country.borough"].browse(list(old_boroughs)).unlink()
+                logger.info(
+                    "%d res.country.borough entries deleted for country %s"
+                    % (len(old_boroughs), country.name)
+                )
+            # old_departments -= set(department_dict.values())
+            # if old_departments:
+            #     logger.info("removing department entries")
+            #     self.env["res.country.department"].browse(list(old_departments)).unlink()
+            #     logger.info(
+            #         "%d res.country.department entries deleted for country %s"
+            #         % (len(old_departments), country.name)
+            #     )
         logger.info(
-            "The wizard to create cities and/or city zip entries from "
+            "The wizard to create boroughs, cities and/or city zip entries from "
             "geonames has been successfully completed."
         )
         return True
