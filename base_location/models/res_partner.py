@@ -29,8 +29,8 @@ class ResPartner(models.Model):
     )
     city = fields.Char(compute="_compute_city", readonly=False, store=True)
     zip = fields.Char(compute="_compute_zip", readonly=False, store=True)
-    borough_id = fields.Many2one(compute="_compute_borough_id", readonly=False, store=True)
-    department_id = fields.Many2one(compute="_compute_department_id", readonly=False, store=True)
+    borough_id = fields.Many2one("res.country.borough", compute="_compute_borough_id", readonly=False, store=True)
+    department_id = fields.Many2one("res.country.department", compute="_compute_department_id", readonly=False, store=True)
     state_id = fields.Many2one(compute="_compute_state_id", readonly=False, store=True)
     country_id = fields.Many2one(compute="_compute_country_id", readonly=False, store=True)
 
